@@ -2,11 +2,32 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import date, timedelta
-import calendar
+from io import BytesIO
+import re
 
 st.set_page_config(page_title="GEELY Sales Dashboard", layout="wide", initial_sidebar_state="expanded")
 
-SHEET_URL = "https://docs.google.com/spreadsheets/d/1ezLtX2FMnPSFVvyFQ9mdNyiAgw17xvL0XwPeuWC5u80/export?format=csv&gid=1265787437"
+MAIN_SHEET_URL = "https://docs.google.com/spreadsheets/d/1ezLtX2FMnPSFVvyFQ9mdNyiAgw17xvL0XwPeuWC5u80/export?format=csv&gid=1265787437"
+
+DEALER_SHEETS = {
+    "Aktau": {
+        "url": "https://docs.google.com/spreadsheets/d/1EJRyBfDhz98tsZwMveyPlidGSFBDlcm-J0AK0UXHwd0/export?format=csv&gid=1077962440",
+        "sheet": "Контракты",
+    },
+}
+
+date_col = "Дата продажи"
+model_col = "Model 2 车型"
+dealer_col = "Dealer"
+vin_col = "VIN"
+status_col = "logistics status"
+
+dealer_city_col = "City"
+dealer_model_col = "Модель автомобиля"
+dealer_contract_date_col = "Дата контракта"
+dealer_cancel_date_col = "Дата отмены контракта"
+dealer_delivery_date_col = "Дата выдачи автомобиля"
+dealer_vin_col = "VIN"
 
 st.markdown("""
 <style>
@@ -17,163 +38,377 @@ div[data-testid="metric-container"] { background: var(--background-secondary-col
 .geely-logo img { width: 36px; height: 36px; object-fit: contain; }
 .geely-title { font-size: 14px; font-weight: 600; line-height: 1.2; }
 .geely-sub { font-size: 10px; opacity: 0.5; }
+.badge-ok { color: #067647; font-weight: 600; }
+.badge-bad { color: #B42318; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_data(ttl=300)
-def load_data():
-    df = pd.read_csv(SHEET_URL)
+
+def clean_columns(df):
+    df = df.copy()
     df.columns = df.columns.astype(str).str.replace("\n", " ").str.strip()
     return df
 
-df = load_data()
 
-date_col   = "Дата продажи"
-model_col  = "Model 2 车型"
-dealer_col = "Dealer"
+def normalize_text(value):
+    if pd.isna(value):
+        return ""
+    return re.sub(r"\s+", " ", str(value)).strip().casefold()
 
-df[date_col] = pd.to_datetime(df[date_col], dayfirst=True, errors="coerce")
-df = df.dropna(subset=[date_col])
-df["Месяц"] = df[date_col].dt.to_period("M").astype(str)
 
-# ----------------------------
-# SIDEBAR
-# ----------------------------
-with st.sidebar:
-    st.markdown("""
-    <div class="geely-logo">
-      <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Geely_logo.svg/240px-Geely_logo.svg.png"/>
-      <div>
-        <div class="geely-title">Geely KZ</div>
-        <div class="geely-sub">Sales Dashboard</div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
+def normalize_vin(value):
+    if pd.isna(value):
+        return ""
+    return re.sub(r"[^A-Z0-9]", "", str(value).upper().strip())
 
-    st.caption("ДИЛЕРЫ")
-    dealers_list = ["Все"] + sorted(df[dealer_col].dropna().unique().tolist())
-    selected_dealer = st.radio("", dealers_list, label_visibility="collapsed")
 
-# ----------------------------
-# PERIOD FILTER
-# ----------------------------
-today = date.today()
-first_this_month  = today.replace(day=1)
-first_last_month  = (first_this_month - timedelta(days=1)).replace(day=1)
-last_last_month   = first_this_month - timedelta(days=1)
-first_this_year   = today.replace(month=1, day=1)
+def parse_date_series(series):
+    return pd.to_datetime(series, dayfirst=True, errors="coerce").dt.date
 
-col_p1, col_p2, col_p3, col_m = st.columns([1, 1, 1, 2])
 
-with col_p1:
-    btn1 = st.button("Этот месяц", use_container_width=True)
-with col_p2:
-    btn2 = st.button("Прошлый месяц", use_container_width=True)
-with col_p3:
-    btn3 = st.button("Этот год", use_container_width=True)
-with col_m:
-    models_list = ["Все модели"] + sorted(df[model_col].dropna().unique().tolist())
-    selected_model = st.selectbox("", models_list, label_visibility="collapsed")
+def find_col(df, possible_names):
+    normalized = {normalize_text(c): c for c in df.columns}
+    for name in possible_names:
+        if normalize_text(name) in normalized:
+            return normalized[normalize_text(name)]
+    return None
 
-if "period_start" not in st.session_state:
-    st.session_state.period_start = first_this_month
-    st.session_state.period_end   = today
 
-if btn1:
-    st.session_state.period_start = first_this_month
-    st.session_state.period_end   = today
-if btn2:
-    st.session_state.period_start = first_last_month
-    st.session_state.period_end   = last_last_month
-if btn3:
-    st.session_state.period_start = first_this_year
-    st.session_state.period_end   = today
+@st.cache_data(ttl=300)
+def load_main_data():
+    df = pd.read_csv(MAIN_SHEET_URL)
+    return clean_columns(df)
 
-period_start = st.session_state.period_start
-period_end   = st.session_state.period_end
 
-# ----------------------------
-# APPLY FILTERS
-# ----------------------------
-mask = (
-    (df[date_col].dt.date >= period_start) &
-    (df[date_col].dt.date <= period_end)
-)
-dff = df[mask].copy()
+@st.cache_data(ttl=300)
+def load_dealer_data(url):
+    df = pd.read_csv(url)
+    return clean_columns(df)
 
-if selected_dealer != "Все":
-    dff = dff[dff[dealer_col] == selected_dealer]
-if selected_model != "Все модели":
-    dff = dff[dff[model_col] == selected_model]
 
-today_df = dff[dff[date_col].dt.date == today]
+def compare_dealer(main_df, dealer_df, selected_dealer_value):
+    main = main_df.copy()
+    dealer = dealer_df.copy()
 
-st.divider()
+    main[date_col] = pd.to_datetime(main[date_col], dayfirst=True, errors="coerce")
+    dealer[dealer_delivery_date_col] = pd.to_datetime(dealer[dealer_delivery_date_col], dayfirst=True, errors="coerce")
 
-# ----------------------------
-# KPI
-# ----------------------------
-k1, k2, k3, k4 = st.columns(4)
+    main["_vin"] = main[vin_col].map(normalize_vin)
+    dealer["_vin"] = dealer[dealer_vin_col].map(normalize_vin)
 
-total_sales = len(dff)
-top_model   = dff[model_col].value_counts().index[0] if len(dff) > 0 else "—"
-top_model_n = dff[model_col].value_counts().iloc[0]  if len(dff) > 0 else 0
-top_dealer  = dff[dealer_col].value_counts().index[0] if len(dff) > 0 else "—"
-top_dealer_n= dff[dealer_col].value_counts().iloc[0]  if len(dff) > 0 else 0
+    main_dealer = main[
+        (main[dealer_col].map(normalize_text) == normalize_text(selected_dealer_value)) &
+        (main["_vin"] != "")
+    ].copy()
 
-k1.metric("Продажи за период", total_sales)
-k2.metric("Топ модель", top_model, f"{top_model_n} шт.")
-k3.metric("Топ дилер", top_dealer, f"{top_dealer_n} шт.")
-k4.metric("Контракты", "—", "данные скоро", delta_color="off")
+    dealer_contracts = dealer[dealer["_vin"] != ""].copy()
 
-st.divider()
+    main_dealer = main_dealer.drop_duplicates("_vin", keep="last")
+    dealer_contracts = dealer_contracts.drop_duplicates("_vin", keep="last")
 
-# ----------------------------
-# CHARTS
-# ----------------------------
-st.subheader("Продажи по месяцам")
-monthly = dff.groupby("Месяц").size().reset_index(name="Продажи")
-fig1 = px.bar(monthly, x="Месяц", y="Продажи", text="Продажи", color_discrete_sequence=["#1B4F9B"])
-fig1.update_traces(textposition="outside")
-fig1.update_layout(margin=dict(t=10, b=10), height=260, showlegend=False)
-st.plotly_chart(fig1, use_container_width=True)
+    merged = main_dealer.merge(
+        dealer_contracts,
+        on="_vin",
+        how="outer",
+        suffixes=("_base", "_dealer"),
+        indicator=True,
+    )
 
-c1, c2 = st.columns(2)
+    rows = []
+    for _, row in merged.iterrows():
+        vin = row["_vin"]
+        source = row["_merge"]
 
-with c1:
-    st.subheader("По моделям")
-    ms = dff.groupby(model_col).size().reset_index(name="Продажи").sort_values("Продажи", ascending=False)
-    fig2 = px.bar(ms, x=model_col, y="Продажи", text="Продажи", color_discrete_sequence=["#1B4F9B"])
-    fig2.update_traces(textposition="outside")
-    fig2.update_layout(margin=dict(t=10, b=10), height=240, showlegend=False)
-    st.plotly_chart(fig2, use_container_width=True)
+        base_model = row.get(f"{model_col}_base", "")
+        dealer_model = row.get(f"{dealer_model_col}_dealer", "")
+        base_status = row.get(f"{status_col}_base", "")
+        base_sale_date = row.get(f"{date_col}_base", pd.NaT)
+        dealer_delivery_date = row.get(f"{dealer_delivery_date_col}_dealer", pd.NaT)
 
-with c2:
-    st.subheader("По дилерам")
-    ds = dff.groupby(dealer_col).size().reset_index(name="Продажи").sort_values("Продажи", ascending=False)
-    fig3 = px.bar(ds, x=dealer_col, y="Продажи", text="Продажи", color_discrete_sequence=["#1B4F9B"])
-    fig3.update_traces(textposition="outside")
-    fig3.update_layout(margin=dict(t=10, b=10), height=240, showlegend=False, xaxis_tickangle=-30)
-    st.plotly_chart(fig3, use_container_width=True)
+        issues = []
 
-st.divider()
+        if source == "left_only":
+            issues.append("VIN есть в общем файле, но нет в файле дилера")
+        elif source == "right_only":
+            issues.append("VIN есть в файле дилера, но нет в общем файле по этому дилеру")
 
-# ----------------------------
-# СЕГОДНЯ + КОНТРАКТЫ
-# ----------------------------
-t1, t2 = st.columns(2)
+        if source == "both":
+            if normalize_text(base_model) and normalize_text(dealer_model):
+                if normalize_text(base_model) != normalize_text(dealer_model):
+                    issues.append("Не совпадает модель")
 
-with t1:
-    st.subheader(f"Продажи сегодня — {today.strftime('%d.%m.%Y')}")
-    if len(today_df) == 0:
-        st.info("Сегодня продаж пока нет")
-    else:
-        today_by_model = today_df.groupby(model_col).size().reset_index(name="Шт.").sort_values("Шт.", ascending=False)
-        st.dataframe(today_by_model, use_container_width=True, hide_index=True)
+            if normalize_text(base_status) == "sales":
+                if pd.isna(dealer_delivery_date):
+                    issues.append("В общем файле статус Sales, но у дилера нет даты выдачи")
+                elif not pd.isna(base_sale_date) and base_sale_date.date() != dealer_delivery_date.date():
+                    issues.append("Дата продажи не совпадает с датой выдачи")
 
-with t2:
-    st.subheader("Контракты")
-    st.info("Данные по контрактам подключатся позже — место зарезервировано")
+            if normalize_text(base_status) != "sales" and not pd.isna(dealer_delivery_date):
+                issues.append("У дилера есть дата выдачи, но в общем файле статус не Sales")
 
-with st.expander("Таблица данных"):
-    st.dataframe(dff, use_container_width=True, hide_index=True)
+        result = "OK" if not issues else "Ошибка"
+
+        rows.append({
+            "Результат": result,
+            "Что не совпадает": "; ".join(issues) if issues else "",
+            "VIN": vin,
+            "Dealer в общем файле": row.get(f"{dealer_col}_base", ""),
+            "City у дилера": row.get(f"{dealer_city_col}_dealer", ""),
+            "logistics status": base_status,
+            "Модель в общем файле": base_model,
+            "Модель у дилера": dealer_model,
+            "Дата продажи": row.get(f"{date_col}_base", ""),
+            "Дата выдачи дилера": row.get(f"{dealer_delivery_date_col}_dealer", ""),
+            "Дата контракта": row.get(f"{dealer_contract_date_col}_dealer", ""),
+            "Дата отмены контракта": row.get(f"{dealer_cancel_date_col}_dealer", ""),
+        })
+
+    result_df = pd.DataFrame(rows)
+
+    status_view = main_dealer[[vin_col, dealer_col, model_col, status_col, date_col]].copy()
+    return result_df, status_view, main_dealer, dealer_contracts
+
+
+df = load_main_data()
+
+tab_dashboard, tab_check = st.tabs(["Дашборд", "Проверка"])
+
+
+with tab_dashboard:
+    df_sales = df.copy()
+
+    df_sales[date_col] = pd.to_datetime(df_sales[date_col], dayfirst=True, errors="coerce")
+    df_sales = df_sales.dropna(subset=[date_col])
+    df_sales["Месяц"] = df_sales[date_col].dt.to_period("M").astype(str)
+
+    with st.sidebar:
+        st.markdown("""
+        <div class="geely-logo">
+          <img src="https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Geely_logo.svg/240px-Geely_logo.svg.png"/>
+          <div>
+            <div class="geely-title">Geely KZ</div>
+            <div class="geely-sub">Sales Dashboard</div>
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.caption("ДИЛЕРЫ")
+        dealers_list = ["Все"] + sorted(df_sales[dealer_col].dropna().unique().tolist())
+        selected_dealer = st.radio("", dealers_list, label_visibility="collapsed")
+
+    today = date.today()
+    first_this_month = today.replace(day=1)
+    first_last_month = (first_this_month - timedelta(days=1)).replace(day=1)
+    last_last_month = first_this_month - timedelta(days=1)
+    first_this_year = today.replace(month=1, day=1)
+
+    col_p1, col_p2, col_p3, col_m = st.columns([1, 1, 1, 2])
+
+    with col_p1:
+        btn1 = st.button("Этот месяц", use_container_width=True)
+    with col_p2:
+        btn2 = st.button("Прошлый месяц", use_container_width=True)
+    with col_p3:
+        btn3 = st.button("Этот год", use_container_width=True)
+    with col_m:
+        models_list = ["Все модели"] + sorted(df_sales[model_col].dropna().unique().tolist())
+        selected_model = st.selectbox("", models_list, label_visibility="collapsed")
+
+    if "period_start" not in st.session_state:
+        st.session_state.period_start = first_this_month
+        st.session_state.period_end = today
+
+    if btn1:
+        st.session_state.period_start = first_this_month
+        st.session_state.period_end = today
+    if btn2:
+        st.session_state.period_start = first_last_month
+        st.session_state.period_end = last_last_month
+    if btn3:
+        st.session_state.period_start = first_this_year
+        st.session_state.period_end = today
+
+    period_start = st.session_state.period_start
+    period_end = st.session_state.period_end
+
+    mask = (
+        (df_sales[date_col].dt.date >= period_start) &
+        (df_sales[date_col].dt.date <= period_end)
+    )
+    dff = df_sales[mask].copy()
+
+    if selected_dealer != "Все":
+        dff = dff[dff[dealer_col] == selected_dealer]
+    if selected_model != "Все модели":
+        dff = dff[dff[model_col] == selected_model]
+
+    today_df = dff[dff[date_col].dt.date == today]
+
+    st.divider()
+
+    k1, k2, k3, k4 = st.columns(4)
+
+    total_sales = len(dff)
+    top_model = dff[model_col].value_counts().index[0] if len(dff) > 0 else "—"
+    top_model_n = dff[model_col].value_counts().iloc[0] if len(dff) > 0 else 0
+    top_dealer = dff[dealer_col].value_counts().index[0] if len(dff) > 0 else "—"
+    top_dealer_n = dff[dealer_col].value_counts().iloc[0] if len(dff) > 0 else 0
+
+    k1.metric("Продажи за период", total_sales)
+    k2.metric("Топ модель", top_model, f"{top_model_n} шт.")
+    k3.metric("Топ дилер", top_dealer, f"{top_dealer_n} шт.")
+    k4.metric("Контракты", "—", "данные скоро", delta_color="off")
+
+    st.divider()
+
+    st.subheader("Продажи по месяцам")
+    monthly = dff.groupby("Месяц").size().reset_index(name="Продажи")
+    fig1 = px.bar(monthly, x="Месяц", y="Продажи", text="Продажи", color_discrete_sequence=["#1B4F9B"])
+    fig1.update_traces(textposition="outside")
+    fig1.update_layout(margin=dict(t=10, b=10), height=260, showlegend=False)
+    st.plotly_chart(fig1, use_container_width=True)
+
+    c1, c2 = st.columns(2)
+
+    with c1:
+        st.subheader("По моделям")
+        ms = dff.groupby(model_col).size().reset_index(name="Продажи").sort_values("Продажи", ascending=False)
+        fig2 = px.bar(ms, x=model_col, y="Продажи", text="Продажи", color_discrete_sequence=["#1B4F9B"])
+        fig2.update_traces(textposition="outside")
+        fig2.update_layout(margin=dict(t=10, b=10), height=240, showlegend=False)
+        st.plotly_chart(fig2, use_container_width=True)
+
+    with c2:
+        st.subheader("По дилерам")
+        ds = dff.groupby(dealer_col).size().reset_index(name="Продажи").sort_values("Продажи", ascending=False)
+        fig3 = px.bar(ds, x=dealer_col, y="Продажи", text="Продажи", color_discrete_sequence=["#1B4F9B"])
+        fig3.update_traces(textposition="outside")
+        fig3.update_layout(margin=dict(t=10, b=10), height=240, showlegend=False, xaxis_tickangle=-30)
+        st.plotly_chart(fig3, use_container_width=True)
+
+    st.divider()
+
+    t1, t2 = st.columns(2)
+
+    with t1:
+        st.subheader(f"Продажи сегодня — {today.strftime('%d.%m.%Y')}")
+        if len(today_df) == 0:
+            st.info("Сегодня продаж пока нет")
+        else:
+            today_by_model = today_df.groupby(model_col).size().reset_index(name="Шт.").sort_values("Шт.", ascending=False)
+            st.dataframe(today_by_model, use_container_width=True, hide_index=True)
+
+    with t2:
+        st.subheader("Контракты")
+        st.info("Данные по контрактам подключатся позже — место зарезервировано")
+
+    with st.expander("Таблица данных"):
+        st.dataframe(dff, use_container_width=True, hide_index=True)
+
+
+with tab_check:
+    st.subheader("Проверка данных дилера")
+
+    selected_check_dealer = st.selectbox("Дилер", list(DEALER_SHEETS.keys()))
+
+    dealer_sheet = DEALER_SHEETS[selected_check_dealer]
+    dealer_df = load_dealer_data(dealer_sheet["url"])
+
+    required_main_cols = [dealer_col, model_col, date_col, vin_col, status_col]
+    required_dealer_cols = [
+        dealer_city_col,
+        dealer_model_col,
+        dealer_delivery_date_col,
+        dealer_vin_col,
+    ]
+
+    missing_main = [c for c in required_main_cols if c not in df.columns]
+    missing_dealer = [c for c in required_dealer_cols if c not in dealer_df.columns]
+
+    if missing_main:
+        st.error(f"В общем файле не найдены столбцы: {', '.join(missing_main)}")
+        st.stop()
+
+    if missing_dealer:
+        st.error(f"В файле дилера не найдены столбцы: {', '.join(missing_dealer)}")
+        st.stop()
+
+    dealer_values = sorted(df[dealer_col].dropna().unique().tolist())
+    default_index = 0
+    for i, value in enumerate(dealer_values):
+        if "aktau" in normalize_text(value) or "актау" in normalize_text(value):
+            default_index = i
+            break
+
+    selected_main_dealer_value = st.selectbox(
+        "Как этот дилер называется в общем файле Dealer",
+        dealer_values,
+        index=default_index,
+    )
+
+    result_df, status_view, main_dealer_df, dealer_contracts_df = compare_dealer(
+        df,
+        dealer_df,
+        selected_main_dealer_value,
+    )
+
+    ok_count = len(result_df[result_df["Результат"] == "OK"])
+    bad_count = len(result_df[result_df["Результат"] == "Ошибка"])
+
+    sales_count = len(status_view[status_view[status_col].map(normalize_text) == "sales"])
+    stock_dlr_count = len(status_view[status_view[status_col].map(normalize_text) == "stock dlr"])
+    transit_count = len(status_view[status_view[status_col].map(normalize_text) == "tranzit to dlr"])
+    stock_kz_count = len(status_view[status_view[status_col].map(normalize_text) == "stock kz"])
+
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric("OK", ok_count)
+    k2.metric("Ошибки", bad_count)
+    k3.metric("Sales", sales_count)
+    k4.metric("Stock DLR", stock_dlr_count)
+    k5.metric("Tranzit to DLR", transit_count)
+    k6.metric("Stock KZ", stock_kz_count)
+
+    st.divider()
+
+    status_chart = status_view.groupby(status_col).size().reset_index(name="Количество")
+    fig_status = px.bar(
+        status_chart,
+        x=status_col,
+        y="Количество",
+        text="Количество",
+        color_discrete_sequence=["#1B4F9B"],
+    )
+    fig_status.update_traces(textposition="outside")
+    fig_status.update_layout(height=260, margin=dict(t=10, b=10), showlegend=False)
+    st.plotly_chart(fig_status, use_container_width=True)
+
+    errors_df = result_df[result_df["Результат"] == "Ошибка"].copy()
+    ok_df = result_df[result_df["Результат"] == "OK"].copy()
+
+    tab_err, tab_ok, tab_status, tab_main, tab_dealer = st.tabs([
+        "Ошибки",
+        "OK",
+        "Статусы",
+        "Общий файл",
+        "Файл дилера",
+    ])
+
+    with tab_err:
+        st.dataframe(errors_df, use_container_width=True, hide_index=True)
+
+    with tab_ok:
+        st.dataframe(ok_df, use_container_width=True, hide_index=True)
+
+    with tab_status:
+        st.dataframe(status_view, use_container_width=True, hide_index=True)
+
+    with tab_main:
+        st.caption("Данные из общего файла только по выбранному дилеру")
+        st.dataframe(main_dealer_df, use_container_width=True, hide_index=True)
+
+    with tab_dealer:
+        st.caption("Данные из листа Контракты дилера")
+        st.dataframe(dealer_contracts_df, use_container_width=True, hide_index=True)
+
+    with st.expander("Все результаты проверки"):
+        st.dataframe(result_df, use_container_width=True, hide_index=True)
