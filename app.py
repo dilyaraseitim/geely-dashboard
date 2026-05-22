@@ -715,4 +715,3 @@ with tab_check:
 
     with st.expander("Все результаты проверки"):
         st.dataframe(all_results, use_container_width=True, hide_index=True)
-```
