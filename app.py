@@ -1,3 +1,13 @@
+Конечно. Ниже полный код со всеми текущими корректировками:
+
+- дашборд оставлен;
+- добавлена вкладка **Проверка**;
+- дилеры подтягиваются из `City`;
+- `Dealer 15` или любой другой нерабочий файл просто пропускается;
+- `Stock DLR`, `Tranzit to DLR`, `Stock KZ` не считаются ошибкой, если VIN есть в общем файле, но нет в контрактах дилера;
+- ошибки разделены на `Критично`, `Проверить`, `Информация`, `OK`.
+
+```python
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -189,25 +199,54 @@ def compare_dealer(main_df, dealer_df, selected_dealer_value):
                 add_issue(
                     issues,
                     "Критично",
-                    "VIN",
-                    "VIN есть в общем файле со статусом Sales, но нет в файле дилера",
-                    "Проверить, почему дилер не отразил выдачу/контракт по этому VIN",
+                    "Продажа",
+                    "В общем файле статус Sales, но VIN отсутствует в файле контрактов дилера",
+                    "Проверить, почему дилер не отразил контракт/выдачу по проданной машине",
                 )
-            elif base_status_norm in ["stock dlr", "tranzit to dlr", "stock kz"]:
+
+            elif base_status_norm == "stock dlr":
                 add_issue(
                     issues,
                     "Информация",
-                    "VIN",
-                    f"VIN есть в общем файле со статусом {base_status}, но нет в файле дилера",
-                    "Пока действий не требуется, использовать как справочную строку по стоку/логистике",
+                    "Сток дилера",
+                    "VIN есть в общем файле со статусом Stock DLR и отсутствует в контрактах дилера",
+                    "Это нормально: машина стоит на стоке у дилера, продажи по ней пока не должно быть",
                 )
+
+            elif base_status_norm == "tranzit to dlr":
+                add_issue(
+                    issues,
+                    "Информация",
+                    "Транзит",
+                    "VIN есть в общем файле со статусом Tranzit to DLR и отсутствует в контрактах дилера",
+                    "Это нормально: машина еще в пути к дилеру, продажи по ней пока не должно быть",
+                )
+
+            elif base_status_norm == "stock kz":
+                add_issue(
+                    issues,
+                    "Информация",
+                    "Сток KZ",
+                    "VIN есть в общем файле со статусом Stock KZ и отсутствует в контрактах дилера",
+                    "Это нормально: машина еще на складе KZ, у дилера по ней не должно быть продажи",
+                )
+
+            elif base_status_norm == "":
+                add_issue(
+                    issues,
+                    "Проверить",
+                    "Статус",
+                    "VIN есть в общем файле, но отсутствует в контрактах дилера и нет logistics status",
+                    "Заполнить или проверить logistics status в общем файле",
+                )
+
             else:
                 add_issue(
                     issues,
                     "Проверить",
-                    "VIN",
-                    "VIN есть в общем файле, но нет в файле дилера",
-                    "Проверить статус машины и принадлежность дилеру",
+                    "Статус",
+                    f"VIN есть в общем файле со статусом {base_status}, но отсутствует в контрактах дилера",
+                    "Проверить, является ли этот статус нормальным для отсутствия контракта",
                 )
 
         elif source == "right_only":
@@ -554,9 +593,9 @@ with tab_check:
     valid_checks = [x for x in checks if not x["error"]]
 
     if load_errors:
-        with st.expander("Ошибки загрузки / структуры файлов", expanded=True):
+        with st.expander("Пропущенные дилеры", expanded=False):
             for item in load_errors:
-                st.error(f"{item['sheet_name']}: {item['error']}")
+                st.warning(f"{item['sheet_name']}: файл не прочитан, дилер пропущен")
 
     if not valid_checks:
         st.stop()
@@ -686,3 +725,4 @@ with tab_check:
 
     with st.expander("Все результаты проверки"):
         st.dataframe(all_results, use_container_width=True, hide_index=True)
+```
