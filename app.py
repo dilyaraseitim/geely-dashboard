@@ -127,6 +127,17 @@ def detect_dealer_name(dealer_df, fallback_name):
     return fallback_name
 
 
+def add_issue(issues, level, category, problem, action):
+    priority = {"Критично": 3, "Проверить": 2, "Информация": 1, "OK": 0}
+    issues.append({
+        "level": level,
+        "category": category,
+        "problem": problem,
+        "action": action,
+        "priority": priority[level],
+    })
+
+
 def compare_dealer(main_df, dealer_df, selected_dealer_value):
     main = main_df.copy()
     dealer = dealer_df.copy()
@@ -164,36 +175,142 @@ def compare_dealer(main_df, dealer_df, selected_dealer_value):
         base_model = row.get(f"{model_col}_base", "")
         dealer_model = row.get(f"{dealer_model_col}_dealer", "")
         base_status = row.get(f"{status_col}_base", "")
+        base_status_norm = normalize_text(base_status)
+
         base_sale_date = row.get(f"{date_col}_base", pd.NaT)
         dealer_delivery_date = row.get(f"{dealer_delivery_date_col}_dealer", pd.NaT)
+        dealer_contract_date = row.get(f"{dealer_contract_date_col}_dealer", pd.NaT)
+        dealer_cancel_date = row.get(f"{dealer_cancel_date_col}_dealer", pd.NaT)
 
         issues = []
 
         if source == "left_only":
-            issues.append("VIN есть в общем файле, но нет в файле дилера")
+            if base_status_norm == "sales":
+                add_issue(
+                    issues,
+                    "Критично",
+                    "VIN",
+                    "VIN есть в общем файле со статусом Sales, но нет в файле дилера",
+                    "Проверить, почему дилер не отразил выдачу/контракт по этому VIN",
+                )
+            elif base_status_norm in ["stock dlr", "tranzit to dlr", "stock kz"]:
+                add_issue(
+                    issues,
+                    "Информация",
+                    "VIN",
+                    f"VIN есть в общем файле со статусом {base_status}, но нет в файле дилера",
+                    "Пока действий не требуется, использовать как справочную строку по стоку/логистике",
+                )
+            else:
+                add_issue(
+                    issues,
+                    "Проверить",
+                    "VIN",
+                    "VIN есть в общем файле, но нет в файле дилера",
+                    "Проверить статус машины и принадлежность дилеру",
+                )
+
         elif source == "right_only":
-            issues.append("VIN есть в файле дилера, но нет в общем файле по этому дилеру")
+            if not pd.isna(dealer_delivery_date):
+                add_issue(
+                    issues,
+                    "Критично",
+                    "VIN",
+                    "VIN есть у дилера с датой выдачи, но нет в общем файле по этому дилеру",
+                    "Проверить VIN, дилера в общем файле и факт продажи",
+                )
+            else:
+                add_issue(
+                    issues,
+                    "Проверить",
+                    "VIN",
+                    "VIN есть в файле дилера, но нет в общем файле по этому дилеру",
+                    "Проверить, не ошибся ли дилер в VIN или City",
+                )
 
         if source == "both":
             if normalize_text(base_model) and normalize_text(dealer_model):
                 if normalize_text(base_model) != normalize_text(dealer_model):
-                    issues.append("Не совпадает модель")
+                    add_issue(
+                        issues,
+                        "Проверить",
+                        "Модель",
+                        "Модель в общем файле отличается от модели в файле дилера",
+                        "Сверить модель по VIN и исправить название в одном из файлов",
+                    )
 
-            if normalize_text(base_status) == "sales":
+            if base_status_norm == "sales":
                 if pd.isna(dealer_delivery_date):
-                    issues.append("В общем файле статус Sales, но у дилера нет даты выдачи")
+                    add_issue(
+                        issues,
+                        "Критично",
+                        "Статус",
+                        "В общем файле статус Sales, но у дилера нет даты выдачи автомобиля",
+                        "Попросить дилера заполнить дату выдачи или проверить статус Sales в общем файле",
+                    )
                 elif not pd.isna(base_sale_date) and base_sale_date.date() != dealer_delivery_date.date():
-                    issues.append("Дата продажи не совпадает с датой выдачи")
+                    add_issue(
+                        issues,
+                        "Проверить",
+                        "Дата",
+                        "Дата продажи в общем файле отличается от даты выдачи у дилера",
+                        "Сверить правильную дату продажи/выдачи и исправить один из файлов",
+                    )
 
-            if normalize_text(base_status) != "sales" and not pd.isna(dealer_delivery_date):
-                issues.append("У дилера есть дата выдачи, но в общем файле статус не Sales")
+            if base_status_norm in ["stock dlr", "tranzit to dlr", "stock kz"] and not pd.isna(dealer_delivery_date):
+                add_issue(
+                    issues,
+                    "Критично",
+                    "Статус",
+                    f"У дилера есть дата выдачи, но в общем файле статус {base_status}",
+                    "Проверить logistics status в общем файле: возможно машину нужно перевести в Sales",
+                )
 
-        result = "OK" if not issues else "Ошибка"
+            if base_status_norm == "stock dlr":
+                add_issue(
+                    issues,
+                    "Информация",
+                    "Сток",
+                    "Машина числится как Stock DLR",
+                    "Позже сверить с отдельным файлом актуального стока дилера",
+                )
+
+            if base_status_norm == "tranzit to dlr":
+                add_issue(
+                    issues,
+                    "Информация",
+                    "Логистика",
+                    "Машина в статусе Tranzit to DLR",
+                    "Проверить после поступления к дилеру",
+                )
+
+            if base_status_norm == "stock kz":
+                add_issue(
+                    issues,
+                    "Информация",
+                    "Сток",
+                    "Машина в статусе Stock KZ",
+                    "У дилера по ней обычно не должно быть выдачи",
+                )
+
+        if not issues:
+            add_issue(
+                issues,
+                "OK",
+                "OK",
+                "Данные совпадают по текущим правилам",
+                "Действий не требуется",
+            )
+
+        main_issue = sorted(issues, key=lambda x: x["priority"], reverse=True)[0]
 
         rows.append({
+            "Уровень": main_issue["level"],
+            "Категория": main_issue["category"],
+            "Проблема": main_issue["problem"],
+            "Что сделать": main_issue["action"],
+            "Все замечания": " | ".join([x["problem"] for x in issues if x["level"] != "OK"]),
             "Дилер": selected_dealer_value,
-            "Результат": result,
-            "Что не совпадает": "; ".join(issues) if issues else "",
             "VIN": vin,
             "Dealer в общем файле": row.get(f"{dealer_col}_base", ""),
             "City у дилера": row.get(f"{dealer_city_col}_dealer", ""),
@@ -201,9 +318,9 @@ def compare_dealer(main_df, dealer_df, selected_dealer_value):
             "Модель в общем файле": base_model,
             "Модель у дилера": dealer_model,
             "Дата продажи": row.get(f"{date_col}_base", ""),
-            "Дата выдачи дилера": row.get(f"{dealer_delivery_date_col}_dealer", ""),
-            "Дата контракта": row.get(f"{dealer_contract_date_col}_dealer", ""),
-            "Дата отмены контракта": row.get(f"{dealer_cancel_date_col}_dealer", ""),
+            "Дата выдачи дилера": dealer_delivery_date,
+            "Дата контракта": dealer_contract_date,
+            "Дата отмены контракта": dealer_cancel_date,
         })
 
     result_df = pd.DataFrame(rows)
@@ -458,21 +575,27 @@ with tab_check:
         st.warning("Нет данных для проверки.")
         st.stop()
 
-    ok_count = len(all_results[all_results["Результат"] == "OK"])
-    bad_count = len(all_results[all_results["Результат"] == "Ошибка"])
+    critical_count = len(all_results[all_results["Уровень"] == "Критично"])
+    check_count = len(all_results[all_results["Уровень"] == "Проверить"])
+    info_count = len(all_results[all_results["Уровень"] == "Информация"])
+    ok_count = len(all_results[all_results["Уровень"] == "OK"])
 
     sales_count = len(all_statuses[all_statuses[status_col].map(normalize_text) == "sales"]) if not all_statuses.empty else 0
     stock_dlr_count = len(all_statuses[all_statuses[status_col].map(normalize_text) == "stock dlr"]) if not all_statuses.empty else 0
     transit_count = len(all_statuses[all_statuses[status_col].map(normalize_text) == "tranzit to dlr"]) if not all_statuses.empty else 0
     stock_kz_count = len(all_statuses[all_statuses[status_col].map(normalize_text) == "stock kz"]) if not all_statuses.empty else 0
 
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
-    k1.metric("OK всего", ok_count)
-    k2.metric("Ошибки всего", bad_count)
-    k3.metric("Sales", sales_count)
-    k4.metric("Stock DLR", stock_dlr_count)
-    k5.metric("Tranzit to DLR", transit_count)
-    k6.metric("Stock KZ", stock_kz_count)
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Критично", critical_count)
+    k2.metric("Проверить", check_count)
+    k3.metric("Информация", info_count)
+    k4.metric("OK", ok_count)
+
+    k5, k6, k7, k8 = st.columns(4)
+    k5.metric("Sales", sales_count)
+    k6.metric("Stock DLR", stock_dlr_count)
+    k7.metric("Tranzit to DLR", transit_count)
+    k8.metric("Stock KZ", stock_kz_count)
 
     st.divider()
 
@@ -483,8 +606,10 @@ with tab_check:
 
         summary_rows.append({
             "Дилер": item["dealer_name"],
-            "OK": len(result_df[result_df["Результат"] == "OK"]),
-            "Ошибки": len(result_df[result_df["Результат"] == "Ошибка"]),
+            "Критично": len(result_df[result_df["Уровень"] == "Критично"]),
+            "Проверить": len(result_df[result_df["Уровень"] == "Проверить"]),
+            "Информация": len(result_df[result_df["Уровень"] == "Информация"]),
+            "OK": len(result_df[result_df["Уровень"] == "OK"]),
             "Всего VIN в проверке": len(result_df),
             "Sales": len(status_view[status_view[status_col].map(normalize_text) == "sales"]) if not status_view.empty else 0,
             "Stock DLR": len(status_view[status_view[status_col].map(normalize_text) == "stock dlr"]) if not status_view.empty else 0,
@@ -492,41 +617,58 @@ with tab_check:
             "Stock KZ": len(status_view[status_view[status_col].map(normalize_text) == "stock kz"]) if not status_view.empty else 0,
         })
 
-    summary_df = pd.DataFrame(summary_rows).sort_values("Ошибки", ascending=False)
+    summary_df = pd.DataFrame(summary_rows).sort_values(["Критично", "Проверить"], ascending=False)
 
     fig_summary = px.bar(
         summary_df,
         x="Дилер",
-        y=["OK", "Ошибки"],
+        y=["Критично", "Проверить", "Информация", "OK"],
         barmode="group",
         text_auto=True,
         color_discrete_map={
+            "Критично": "#B42318",
+            "Проверить": "#B54708",
+            "Информация": "#175CD3",
             "OK": "#067647",
-            "Ошибки": "#B42318",
         },
     )
-    fig_summary.update_layout(height=360, margin=dict(t=10, b=10), xaxis_tickangle=-30)
+    fig_summary.update_layout(height=380, margin=dict(t=10, b=10), xaxis_tickangle=-30)
     st.plotly_chart(fig_summary, use_container_width=True)
 
-    errors_df = all_results[all_results["Результат"] == "Ошибка"].copy()
-    ok_df = all_results[all_results["Результат"] == "OK"].copy()
+    critical_df = all_results[all_results["Уровень"] == "Критично"].copy()
+    check_df = all_results[all_results["Уровень"] == "Проверить"].copy()
+    info_df = all_results[all_results["Уровень"] == "Информация"].copy()
+    ok_df = all_results[all_results["Уровень"] == "OK"].copy()
 
-    tab_total, tab_err, tab_ok, tab_status, tab_raw = st.tabs([
+    tab_action, tab_critical, tab_check_rows, tab_info, tab_ok, tab_total, tab_status, tab_raw = st.tabs([
+        "Требует действия",
+        "Критично",
+        "Проверить",
+        "Информация",
+        "OK",
         "Итог по дилерам",
-        "Все ошибки",
-        "Все OK",
         "Все статусы",
-        "Данные по выбранным файлам",
+        "Сырые данные",
     ])
 
-    with tab_total:
-        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+    with tab_action:
+        action_df = all_results[all_results["Уровень"].isin(["Критично", "Проверить"])].copy()
+        st.dataframe(action_df, use_container_width=True, hide_index=True)
 
-    with tab_err:
-        st.dataframe(errors_df, use_container_width=True, hide_index=True)
+    with tab_critical:
+        st.dataframe(critical_df, use_container_width=True, hide_index=True)
+
+    with tab_check_rows:
+        st.dataframe(check_df, use_container_width=True, hide_index=True)
+
+    with tab_info:
+        st.dataframe(info_df, use_container_width=True, hide_index=True)
 
     with tab_ok:
         st.dataframe(ok_df, use_container_width=True, hide_index=True)
+
+    with tab_total:
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
     with tab_status:
         st.dataframe(all_statuses, use_container_width=True, hide_index=True)
