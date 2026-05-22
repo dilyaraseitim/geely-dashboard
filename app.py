@@ -51,6 +51,20 @@ dealer_vin_col = "VIN"
 
 SKIP_STATUSES = ["stock dlr", "tranzit to dlr", "stock kz"]
 
+MODEL_EQUIVALENTS = {
+    ("coolray new", "coolray"),
+    ("monjaro new", "monjaro"),
+    ("emgrand", "emgrand"),
+    ("atlas", "atlas 4wd"),
+    ("atlas", "atlas 2wd"),
+    ("okavango", "okavango"),
+    ("coolray", "coolray"),
+    ("monjaro", "monjaro"),
+    ("atlas skd", "atlas 4wd"),
+    ("tugella", "tugella"),
+    ("azkarra", "azkarra"),
+}
+
 st.markdown("""
 <style>
 [data-testid="stSidebar"] { min-width: 200px !important; max-width: 200px !important; }
@@ -87,11 +101,50 @@ def get_value(row, col, suffix=None):
         suffixed_col = f"{col}_{suffix}"
         if suffixed_col in row.index:
             return row.get(suffixed_col)
-
     if col in row.index:
         return row.get(col)
-
     return ""
+
+
+def models_match(base_model, dealer_model):
+    base = normalize_text(base_model)
+    dealer = normalize_text(dealer_model)
+    return base == dealer or (base, dealer) in MODEL_EQUIVALENTS
+
+
+def dates_match_for_rules(base_date, dealer_date):
+    if pd.isna(base_date) or pd.isna(dealer_date):
+        return False
+
+    base_date = pd.to_datetime(base_date, errors="coerce")
+    dealer_date = pd.to_datetime(dealer_date, errors="coerce")
+
+    if pd.isna(base_date) or pd.isna(dealer_date):
+        return False
+
+    if base_date.date() == dealer_date.date():
+        return True
+
+    if base_date.year == 2025 and dealer_date.year == 2025:
+        return base_date.month == dealer_date.month
+
+    return False
+
+
+def canonical_vin(value, vin_map):
+    vin = normalize_vin(value)
+    return vin_map.get(vin, vin)
+
+
+def add_issue(issues, level, category, problem, action):
+    priority = {"Критично": 3, "Проверить": 2, "OK": 0}
+    issues.append({
+        "level": level,
+        "category": category,
+        "problem": problem,
+        "action": action,
+        "priority": priority[level],
+    })
 
 
 @st.cache_data(ttl=300)
@@ -106,6 +159,48 @@ def load_dealer_data(url):
     return clean_columns(df)
 
 
+def build_vin_map(vin_file):
+    if vin_file is None:
+        return {}, set()
+
+    vin_df = pd.read_excel(vin_file)
+    vin_df = clean_columns(vin_df)
+
+    cols = vin_df.columns.tolist()
+    if len(cols) < 2:
+        return {}, set()
+
+    kaz_col = None
+    china_col = None
+
+    for col in cols:
+        name = normalize_text(col)
+        if "каз" in name or "kz" in name or "казахстан" in name:
+            kaz_col = col
+        if "кит" in name or "china" in name or "chinese" in name or "cn" in name:
+            china_col = col
+
+    if kaz_col is None:
+        kaz_col = cols[0]
+    if china_col is None:
+        china_col = cols[1]
+
+    vin_map = {}
+    china_vins = set()
+
+    for _, row in vin_df.iterrows():
+        kaz_vin = normalize_vin(row.get(kaz_col))
+        china_vin = normalize_vin(row.get(china_col))
+
+        if kaz_vin:
+            vin_map[kaz_vin] = kaz_vin
+        if china_vin and kaz_vin:
+            vin_map[china_vin] = kaz_vin
+            china_vins.add(china_vin)
+
+    return vin_map, china_vins
+
+
 @st.cache_data(ttl=300)
 def build_dealer_options(dealer_sheets):
     options = {}
@@ -113,13 +208,7 @@ def build_dealer_options(dealer_sheets):
     for fallback_name, sheet_url in dealer_sheets.items():
         try:
             dealer_df = load_dealer_data(sheet_url)
-            dealer_name = fallback_name
-
-            if dealer_city_col in dealer_df.columns:
-                cities = dealer_df[dealer_city_col].dropna().astype(str).str.strip()
-                cities = cities[cities != ""]
-                if len(cities) > 0:
-                    dealer_name = cities.value_counts().index[0]
+            dealer_name = detect_dealer_name(dealer_df, fallback_name)
 
             if dealer_name in options:
                 dealer_name = f"{dealer_name} ({fallback_name})"
@@ -141,26 +230,75 @@ def detect_dealer_name(dealer_df, fallback_name):
     return fallback_name
 
 
-def add_issue(issues, level, category, problem, action):
-    priority = {"Критично": 3, "Проверить": 2, "OK": 0}
-    issues.append({
-        "level": level,
-        "category": category,
-        "problem": problem,
-        "action": action,
-        "priority": priority[level],
-    })
+def match_main_dealer_name(detected_name, main_dealer_values):
+    for value in main_dealer_values:
+        if normalize_text(value) == normalize_text(detected_name):
+            return value
+    return detected_name
 
 
-def compare_dealer(main_df, dealer_df, selected_dealer_value):
+def prepare_loaded_dealer(sheet_name, sheet_url, main_dealer_values):
+    dealer_df = load_dealer_data(sheet_url)
+    detected_name = detect_dealer_name(dealer_df, sheet_name)
+    matched_main_name = match_main_dealer_name(detected_name, main_dealer_values)
+
+    return {
+        "sheet_name": sheet_name,
+        "dealer_name": matched_main_name,
+        "dealer_df": dealer_df,
+        "error": None,
+    }
+
+
+def build_dealer_vin_locations(loaded_dealers, vin_map, china_vins):
+    locations = {}
+
+    for item in loaded_dealers:
+        dealer_df = item["dealer_df"].copy()
+        dealer_name = item["dealer_name"]
+
+        if dealer_vin_col not in dealer_df.columns:
+            continue
+
+        dealer_df[dealer_delivery_date_col] = pd.to_datetime(
+            dealer_df.get(dealer_delivery_date_col),
+            dayfirst=True,
+            errors="coerce",
+        )
+
+        for _, row in dealer_df.iterrows():
+            original_vin = normalize_vin(row.get(dealer_vin_col))
+            canonical = canonical_vin(original_vin, vin_map)
+
+            if not canonical:
+                continue
+
+            delivery_date = row.get(dealer_delivery_date_col)
+            if pd.isna(delivery_date):
+                continue
+
+            locations.setdefault(canonical, []).append({
+                "dealer": dealer_name,
+                "original_vin": original_vin,
+                "used_china_vin": original_vin in china_vins,
+                "delivery_date": delivery_date,
+            })
+
+    return locations
+
+
+def compare_dealer(main_df, dealer_df, selected_dealer_value, vin_map, china_vins, dealer_vin_locations):
     main = main_df.copy()
     dealer = dealer_df.copy()
 
     main[date_col] = pd.to_datetime(main[date_col], dayfirst=True, errors="coerce")
     dealer[dealer_delivery_date_col] = pd.to_datetime(dealer[dealer_delivery_date_col], dayfirst=True, errors="coerce")
 
-    main["_vin"] = main[vin_col].map(normalize_vin)
-    dealer["_vin"] = dealer[dealer_vin_col].map(normalize_vin)
+    main["_original_vin"] = main[vin_col].map(normalize_vin)
+    dealer["_original_vin"] = dealer[dealer_vin_col].map(normalize_vin)
+
+    main["_vin"] = main["_original_vin"].apply(lambda x: canonical_vin(x, vin_map))
+    dealer["_vin"] = dealer["_original_vin"].apply(lambda x: canonical_vin(x, vin_map))
 
     main_dealer = main[
         (main[dealer_col].map(normalize_text) == normalize_text(selected_dealer_value)) &
@@ -196,27 +334,54 @@ def compare_dealer(main_df, dealer_df, selected_dealer_value):
         dealer_delivery_date = get_value(row, dealer_delivery_date_col, "dealer")
         dealer_contract_date = get_value(row, dealer_contract_date_col, "dealer")
         dealer_cancel_date = get_value(row, dealer_cancel_date_col, "dealer")
+        dealer_original_vin = get_value(row, "_original_vin", "dealer")
 
         issues = []
 
+        if dealer_original_vin in china_vins:
+            add_issue(
+                issues,
+                "Проверить",
+                "VIN",
+                "Дилер указал китайский VIN вместо казахстанского VIN",
+                "Попросить дилера заменить VIN в отчете на казахстанский",
+            )
+
         if source == "left_only":
             if base_status_norm == "sales":
-                add_issue(
-                    issues,
-                    "Критично",
-                    "Продажа",
-                    "В общем файле статус Sales, но VIN отсутствует в файле контрактов дилера",
-                    "Проверить, почему дилер не отразил контракт/выдачу по проданной машине",
-                )
+                other_dealers = [
+                    x for x in dealer_vin_locations.get(vin, [])
+                    if normalize_text(x["dealer"]) != normalize_text(selected_dealer_value)
+                ]
+
+                if other_dealers:
+                    names = sorted(set(x["dealer"] for x in other_dealers))
+                    add_issue(
+                        issues,
+                        "Критично",
+                        "Дилер",
+                        f"В общем файле продажа указана за {selected_dealer_value}, но в отчете продажу показывает: {', '.join(names)}",
+                        "Проверить, какой дилер фактически продал автомобиль, и исправить Dealer в общем файле",
+                    )
+                else:
+                    add_issue(
+                        issues,
+                        "Критично",
+                        "Продажа",
+                        "В общем файле статус Sales, но VIN отсутствует в файле контрактов дилера",
+                        "Проверить, почему дилер не отразил контракт/выдачу по проданной машине",
+                    )
+
             elif base_status_norm in SKIP_STATUSES:
                 continue
+
             elif base_status_norm == "":
                 add_issue(
                     issues,
                     "Проверить",
                     "Статус",
-                    "VIN есть в общем файле, но код не смог прочитать logistics status",
-                    "Проверить точное название столбца logistics status в общем файле",
+                    "VIN есть в общем файле, но не заполнен или не прочитан logistics status",
+                    "Проверить точное название и значение столбца logistics status в общем файле",
                 )
             else:
                 add_issue(
@@ -260,7 +425,7 @@ def compare_dealer(main_df, dealer_df, selected_dealer_value):
 
             if base_status_norm == "sales":
                 if normalize_text(base_model) and normalize_text(dealer_model):
-                    if normalize_text(base_model) != normalize_text(dealer_model):
+                    if not models_match(base_model, dealer_model):
                         add_issue(
                             issues,
                             "Проверить",
@@ -277,13 +442,13 @@ def compare_dealer(main_df, dealer_df, selected_dealer_value):
                         "В общем файле статус Sales, но у дилера нет даты выдачи автомобиля",
                         "Попросить дилера заполнить дату выдачи или проверить статус Sales в общем файле",
                     )
-                elif not pd.isna(base_sale_date) and base_sale_date.date() != dealer_delivery_date.date():
+                elif not dates_match_for_rules(base_sale_date, dealer_delivery_date):
                     add_issue(
                         issues,
                         "Проверить",
                         "Дата",
                         "Дата продажи в общем файле отличается от даты выдачи у дилера",
-                        "Сверить правильную дату продажи/выдачи и исправить один из файлов",
+                        "За 2025 год допускается совпадение месяца, за 2026 год дата должна совпадать точно",
                     )
 
             if base_status_norm not in ["sales"] + SKIP_STATUSES:
@@ -313,7 +478,8 @@ def compare_dealer(main_df, dealer_df, selected_dealer_value):
             "Что сделать": main_issue["action"],
             "Все замечания": " | ".join([x["problem"] for x in issues if x["level"] != "OK"]),
             "Дилер": selected_dealer_value,
-            "VIN": vin,
+            "VIN для сверки": vin,
+            "VIN дилера исходный": dealer_original_vin,
             "Dealer в общем файле": get_value(row, dealer_col, "base"),
             "City у дилера": get_value(row, dealer_city_col, "dealer"),
             "logistics status": base_status,
@@ -471,6 +637,13 @@ with tab_dashboard:
 with tab_check:
     st.subheader("Проверка продаж дилеров")
 
+    vin_mapping_file = st.file_uploader(
+        "Файл соответствия казахстанского и китайского VIN",
+        type=["xlsx"],
+    )
+
+    vin_map, china_vins = build_vin_map(vin_mapping_file)
+
     dealer_options = build_dealer_options(DEALER_SHEETS)
 
     dealer_choice = st.selectbox(
@@ -480,74 +653,64 @@ with tab_check:
 
     main_dealer_values = sorted(df[dealer_col].dropna().unique().tolist())
 
-    def run_one_dealer_check(sheet_name, sheet_url):
-        dealer_df = load_dealer_data(sheet_url)
+    all_loaded_dealers = []
+    load_errors = []
 
-        required_main_cols = [dealer_col, model_col, date_col, vin_col, status_col]
-        required_dealer_cols = [
-            dealer_city_col,
-            dealer_model_col,
-            dealer_delivery_date_col,
-            dealer_vin_col,
+    with st.spinner("Загружаю дилерские файлы..."):
+        for sheet_name, sheet_url in dealer_options.items():
+            try:
+                all_loaded_dealers.append(prepare_loaded_dealer(sheet_name, sheet_url, main_dealer_values))
+            except Exception as exc:
+                load_errors.append({
+                    "sheet_name": sheet_name,
+                    "error": str(exc),
+                })
+
+    dealer_vin_locations = build_dealer_vin_locations(all_loaded_dealers, vin_map, china_vins)
+
+    if dealer_choice == "Все дилеры":
+        selected_loaded_dealers = all_loaded_dealers
+    else:
+        selected_loaded_dealers = [
+            item for item in all_loaded_dealers
+            if normalize_text(item["sheet_name"]) == normalize_text(dealer_choice)
+            or normalize_text(item["dealer_name"]) == normalize_text(dealer_choice)
         ]
 
-        missing_main = [c for c in required_main_cols if c not in df.columns]
-        missing_dealer = [c for c in required_dealer_cols if c not in dealer_df.columns]
-
-        if missing_main or missing_dealer:
-            return {
-                "sheet_name": sheet_name,
-                "dealer_name": sheet_name,
-                "error": f"Нет колонок. Общий файл: {missing_main}. Файл дилера: {missing_dealer}",
-                "result_df": pd.DataFrame(),
-                "status_view": pd.DataFrame(),
-                "main_df": pd.DataFrame(),
-                "dealer_df": dealer_df,
-            }
-
-        detected_name = detect_dealer_name(dealer_df, sheet_name)
-
-        matched_main_name = detected_name
-        for value in main_dealer_values:
-            if normalize_text(value) == normalize_text(detected_name):
-                matched_main_name = value
-                break
-
-        result_df, status_view, main_dealer_df, dealer_contracts_df = compare_dealer(
-            df,
-            dealer_df,
-            matched_main_name,
-        )
-
-        if not result_df.empty:
-            result_df["Дилер"] = matched_main_name
-
-        if not status_view.empty:
-            status_view["Дилер"] = matched_main_name
-
-        return {
-            "sheet_name": sheet_name,
-            "dealer_name": matched_main_name,
-            "error": None,
-            "result_df": result_df,
-            "status_view": status_view,
-            "main_df": main_dealer_df,
-            "dealer_df": dealer_contracts_df,
-        }
-
-    selected_items = dealer_options.items()
-    if dealer_choice != "Все дилеры":
-        selected_items = [(dealer_choice, dealer_options[dealer_choice])]
-
     checks = []
-    with st.spinner("Загружаю и сверяю дилеров..."):
-        for sheet_name, sheet_url in selected_items:
+
+    with st.spinner("Сверяю продажи..."):
+        for item in selected_loaded_dealers:
             try:
-                checks.append(run_one_dealer_check(sheet_name, sheet_url))
+                result_df, status_view, main_dealer_df, dealer_contracts_df = compare_dealer(
+                    df,
+                    item["dealer_df"],
+                    item["dealer_name"],
+                    vin_map,
+                    china_vins,
+                    dealer_vin_locations,
+                )
+
+                if not result_df.empty:
+                    result_df["Дилер"] = item["dealer_name"]
+
+                if not status_view.empty:
+                    status_view["Дилер"] = item["dealer_name"]
+
+                checks.append({
+                    "sheet_name": item["sheet_name"],
+                    "dealer_name": item["dealer_name"],
+                    "error": None,
+                    "result_df": result_df,
+                    "status_view": status_view,
+                    "main_df": main_dealer_df,
+                    "dealer_df": dealer_contracts_df,
+                })
+
             except Exception as exc:
                 checks.append({
-                    "sheet_name": sheet_name,
-                    "dealer_name": sheet_name,
+                    "sheet_name": item["sheet_name"],
+                    "dealer_name": item["dealer_name"],
                     "error": str(exc),
                     "result_df": pd.DataFrame(),
                     "status_view": pd.DataFrame(),
@@ -555,13 +718,15 @@ with tab_check:
                     "dealer_df": pd.DataFrame(),
                 })
 
-    load_errors = [x for x in checks if x["error"]]
+    skipped_checks = [x for x in checks if x["error"]]
     valid_checks = [x for x in checks if not x["error"]]
 
-    if load_errors:
+    if load_errors or skipped_checks:
         with st.expander("Пропущенные дилеры", expanded=False):
             for item in load_errors:
                 st.warning(f"{item['sheet_name']}: файл не прочитан, дилер пропущен")
+            for item in skipped_checks:
+                st.warning(f"{item['sheet_name']}: ошибка при сверке, дилер пропущен")
 
     if not valid_checks:
         st.stop()
@@ -599,6 +764,7 @@ with tab_check:
     st.divider()
 
     summary_rows = []
+
     for item in valid_checks:
         result_df = item["result_df"]
         status_view = item["status_view"]
