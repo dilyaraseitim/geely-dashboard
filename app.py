@@ -2,7 +2,6 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import date, timedelta
-from io import BytesIO
 import re
 
 st.set_page_config(page_title="GEELY Sales Dashboard", layout="wide", initial_sidebar_state="expanded")
@@ -10,10 +9,31 @@ st.set_page_config(page_title="GEELY Sales Dashboard", layout="wide", initial_si
 MAIN_SHEET_URL = "https://docs.google.com/spreadsheets/d/1ezLtX2FMnPSFVvyFQ9mdNyiAgw17xvL0XwPeuWC5u80/export?format=csv&gid=1265787437"
 
 DEALER_SHEETS = {
-    "Aktau": {
-        "url": "https://docs.google.com/spreadsheets/d/1EJRyBfDhz98tsZwMveyPlidGSFBDlcm-J0AK0UXHwd0/export?format=csv&gid=1077962440",
-        "sheet": "Контракты",
-    },
+    "Aktau": "https://docs.google.com/spreadsheets/d/1EJRyBfDhz98tsZwMveyPlidGSFBDlcm-J0AK0UXHwd0/export?format=csv&gid=1077962440",
+    "Dealer 02": "https://docs.google.com/spreadsheets/d/1vw6TOlN6n8Wcp23WpuGt1uYAmt2cBBTSEs1Ap4tILaw/export?format=csv&gid=1077962440",
+    "Dealer 03": "https://docs.google.com/spreadsheets/d/1Wiql53qEcO-Qxdd9Ev2NkeRoV808jKkNFNiOeDzM3rE/export?format=csv&gid=1077962440",
+    "Dealer 04": "https://docs.google.com/spreadsheets/d/1YHhYj9O4tcc9aaI1tnj2a8T6MAiini6u358pcvyr_MA/export?format=csv&gid=1077962440",
+    "Dealer 05": "https://docs.google.com/spreadsheets/d/1xJD6aSbd1PjeR32YAVioSSlBywXeKAvdOVF7mwQmMyw/export?format=csv&gid=1077962440",
+    "Dealer 06": "https://docs.google.com/spreadsheets/d/1TSM6sCKF9Wmk1vKecKcYq9zDoOG84hFTkuOC8eF7jPc/export?format=csv&gid=1077962440",
+    "Dealer 07": "https://docs.google.com/spreadsheets/d/1TjqZWqMIbtMpeIJX2ie8NRlBbr-6Fn5b89-sSwKbmnI/export?format=csv&gid=1077962440",
+    "Dealer 08": "https://docs.google.com/spreadsheets/d/1HmWFn0-DHyqx8yvR-NN2bwubX-WVr4sfBdZSwIVmDpI/export?format=csv&gid=1077962440",
+    "Dealer 09": "https://docs.google.com/spreadsheets/d/1ZWZB8DQg6ZLxWMbO3x6-oylph5_K1rlTzcKNLhYgV8Q/export?format=csv&gid=1077962440",
+    "Dealer 10": "https://docs.google.com/spreadsheets/d/1eurtgsR32wFrpKgk9Vbfrlwoo4qQuNh_DZKgKwV053Q/export?format=csv&gid=1077962440",
+    "Dealer 11": "https://docs.google.com/spreadsheets/d/1Nmzns3SHlt-D87rYGGATXM3tj7WRFzL7DGpLCErTo6M/export?format=csv&gid=1077962440",
+    "Dealer 12": "https://docs.google.com/spreadsheets/d/1FLf5xbPdRrYiOuSKODio2YxkWKcCe0LlF9SaeBRNiGw/export?format=csv&gid=1077962440",
+    "Dealer 13": "https://docs.google.com/spreadsheets/d/1wMCv_E4uRyycqLRu3BcmMpy0Uku_LYJ_RySirMHqWWM/export?format=csv&gid=1077962440",
+    "Dealer 14": "https://docs.google.com/spreadsheets/d/10GlX9hhjAUPSQ838QkF9ilPUF3L0NWU5837eBVFEfyw/export?format=csv&gid=1077962440",
+    "Dealer 15": "https://docs.google.com/spreadsheets/d/1qyuscUVpMmBzQmtllOzFgkB7ZZfcGBxJjsLeraO9JmU/export?format=csv&gid=1077962440",
+    "Dealer 16": "https://docs.google.com/spreadsheets/d/1CTBHlE6_8zcPWjsdzhW9e2h6kLv26mqRc1fHEo1uC_M/export?format=csv&gid=1077962440",
+    "Dealer 17": "https://docs.google.com/spreadsheets/d/1QI9VPyBvt17M_MH7ycA3WLvBiMKULs7b8woAq-iQ5oA/export?format=csv&gid=1077962440",
+    "Dealer 18": "https://docs.google.com/spreadsheets/d/1EvRcSM7Z19_uZrwykc8dRB9AqNLTn7yg7afUi9QgwSk/export?format=csv&gid=1077962440",
+    "Dealer 19": "https://docs.google.com/spreadsheets/d/1nEAUrzLxZelIBJDMgxmQOfYV0XvOvC6A1PkHlOQy_IE/export?format=csv&gid=1077962440",
+    "Dealer 20": "https://docs.google.com/spreadsheets/d/1ezDMETw-Od7E87vJAPo1jOfX3sdVRppig3S1ZQiVpfA/export?format=csv&gid=1077962440",
+    "Dealer 21": "https://docs.google.com/spreadsheets/d/1uDY9TV5cAqyCrEAWY_krZA0J_r8JH-9zNyoP3XsV2rk/export?format=csv&gid=1077962440",
+    "Dealer 22": "https://docs.google.com/spreadsheets/d/1FZk-oTRBqrwuJAFkI63l-o0tGKKNlqjrHxj2GiDu7j8/export?format=csv&gid=1077962440",
+    "Dealer 23": "https://docs.google.com/spreadsheets/d/1fOlimW-a6sqeinlWC9ULO3rFZEHS8fmkhS3yOcZoWks/export?format=csv&gid=1077962440",
+    "Dealer 24": "https://docs.google.com/spreadsheets/d/1a7GFeKeEt30xGQFmdzxBo1Qno84kD8ge8WLnL6jVqcE/export?format=csv&gid=1077962440",
+    "Dealer 25": "https://docs.google.com/spreadsheets/d/1hdfMr_L431efl1fbC09HqKodziY0Jj23xbmly6yz6P4/export?format=csv&gid=1077962440",
 }
 
 date_col = "Дата продажи"
@@ -38,8 +58,6 @@ div[data-testid="metric-container"] { background: var(--background-secondary-col
 .geely-logo img { width: 36px; height: 36px; object-fit: contain; }
 .geely-title { font-size: 14px; font-weight: 600; line-height: 1.2; }
 .geely-sub { font-size: 10px; opacity: 0.5; }
-.badge-ok { color: #067647; font-weight: 600; }
-.badge-bad { color: #B42318; font-weight: 600; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -62,18 +80,6 @@ def normalize_vin(value):
     return re.sub(r"[^A-Z0-9]", "", str(value).upper().strip())
 
 
-def parse_date_series(series):
-    return pd.to_datetime(series, dayfirst=True, errors="coerce").dt.date
-
-
-def find_col(df, possible_names):
-    normalized = {normalize_text(c): c for c in df.columns}
-    for name in possible_names:
-        if normalize_text(name) in normalized:
-            return normalized[normalize_text(name)]
-    return None
-
-
 @st.cache_data(ttl=300)
 def load_main_data():
     df = pd.read_csv(MAIN_SHEET_URL)
@@ -84,6 +90,41 @@ def load_main_data():
 def load_dealer_data(url):
     df = pd.read_csv(url)
     return clean_columns(df)
+
+
+@st.cache_data(ttl=300)
+def build_dealer_options(dealer_sheets):
+    options = {}
+
+    for fallback_name, sheet_url in dealer_sheets.items():
+        try:
+            dealer_df = load_dealer_data(sheet_url)
+
+            dealer_name = fallback_name
+            if dealer_city_col in dealer_df.columns:
+                cities = dealer_df[dealer_city_col].dropna().astype(str).str.strip()
+                cities = cities[cities != ""]
+                if len(cities) > 0:
+                    dealer_name = cities.value_counts().index[0]
+
+            if dealer_name in options:
+                dealer_name = f"{dealer_name} ({fallback_name})"
+
+            options[dealer_name] = sheet_url
+
+        except Exception:
+            options[fallback_name] = sheet_url
+
+    return options
+
+
+def detect_dealer_name(dealer_df, fallback_name):
+    if dealer_city_col in dealer_df.columns:
+        cities = dealer_df[dealer_city_col].dropna().astype(str).str.strip()
+        cities = cities[cities != ""]
+        if len(cities) > 0:
+            return cities.value_counts().index[0]
+    return fallback_name
 
 
 def compare_dealer(main_df, dealer_df, selected_dealer_value):
@@ -115,6 +156,7 @@ def compare_dealer(main_df, dealer_df, selected_dealer_value):
     )
 
     rows = []
+
     for _, row in merged.iterrows():
         vin = row["_vin"]
         source = row["_merge"]
@@ -149,6 +191,7 @@ def compare_dealer(main_df, dealer_df, selected_dealer_value):
         result = "OK" if not issues else "Ошибка"
 
         rows.append({
+            "Дилер": selected_dealer_value,
             "Результат": result,
             "Что не совпадает": "; ".join(issues) if issues else "",
             "VIN": vin,
@@ -164,8 +207,8 @@ def compare_dealer(main_df, dealer_df, selected_dealer_value):
         })
 
     result_df = pd.DataFrame(rows)
-
     status_view = main_dealer[[vin_col, dealer_col, model_col, status_col, date_col]].copy()
+
     return result_df, status_view, main_dealer, dealer_contracts
 
 
@@ -307,62 +350,125 @@ with tab_dashboard:
 
 
 with tab_check:
-    st.subheader("Проверка данных дилера")
+    st.subheader("Проверка данных дилеров")
 
-    selected_check_dealer = st.selectbox("Дилер", list(DEALER_SHEETS.keys()))
+    dealer_options = build_dealer_options(DEALER_SHEETS)
 
-    dealer_sheet = DEALER_SHEETS[selected_check_dealer]
-    dealer_df = load_dealer_data(dealer_sheet["url"])
-
-    required_main_cols = [dealer_col, model_col, date_col, vin_col, status_col]
-    required_dealer_cols = [
-        dealer_city_col,
-        dealer_model_col,
-        dealer_delivery_date_col,
-        dealer_vin_col,
-    ]
-
-    missing_main = [c for c in required_main_cols if c not in df.columns]
-    missing_dealer = [c for c in required_dealer_cols if c not in dealer_df.columns]
-
-    if missing_main:
-        st.error(f"В общем файле не найдены столбцы: {', '.join(missing_main)}")
-        st.stop()
-
-    if missing_dealer:
-        st.error(f"В файле дилера не найдены столбцы: {', '.join(missing_dealer)}")
-        st.stop()
-
-    dealer_values = sorted(df[dealer_col].dropna().unique().tolist())
-    default_index = 0
-    for i, value in enumerate(dealer_values):
-        if "aktau" in normalize_text(value) or "актау" in normalize_text(value):
-            default_index = i
-            break
-
-    selected_main_dealer_value = st.selectbox(
-        "Как этот дилер называется в общем файле Dealer",
-        dealer_values,
-        index=default_index,
+    dealer_choice = st.selectbox(
+        "Дилер",
+        ["Все дилеры"] + list(dealer_options.keys())
     )
 
-    result_df, status_view, main_dealer_df, dealer_contracts_df = compare_dealer(
-        df,
-        dealer_df,
-        selected_main_dealer_value,
+    main_dealer_values = sorted(df[dealer_col].dropna().unique().tolist())
+
+    def run_one_dealer_check(sheet_name, sheet_url):
+        dealer_df = load_dealer_data(sheet_url)
+
+        required_main_cols = [dealer_col, model_col, date_col, vin_col, status_col]
+        required_dealer_cols = [
+            dealer_city_col,
+            dealer_model_col,
+            dealer_delivery_date_col,
+            dealer_vin_col,
+        ]
+
+        missing_main = [c for c in required_main_cols if c not in df.columns]
+        missing_dealer = [c for c in required_dealer_cols if c not in dealer_df.columns]
+
+        if missing_main or missing_dealer:
+            return {
+                "sheet_name": sheet_name,
+                "dealer_name": sheet_name,
+                "error": f"Нет колонок. Общий файл: {missing_main}. Файл дилера: {missing_dealer}",
+                "result_df": pd.DataFrame(),
+                "status_view": pd.DataFrame(),
+                "main_df": pd.DataFrame(),
+                "dealer_df": dealer_df,
+            }
+
+        detected_name = detect_dealer_name(dealer_df, sheet_name)
+
+        matched_main_name = detected_name
+        for value in main_dealer_values:
+            if normalize_text(value) == normalize_text(detected_name):
+                matched_main_name = value
+                break
+
+        result_df, status_view, main_dealer_df, dealer_contracts_df = compare_dealer(
+            df,
+            dealer_df,
+            matched_main_name,
+        )
+
+        result_df["Дилер"] = matched_main_name
+        status_view["Дилер"] = matched_main_name
+
+        return {
+            "sheet_name": sheet_name,
+            "dealer_name": matched_main_name,
+            "error": None,
+            "result_df": result_df,
+            "status_view": status_view,
+            "main_df": main_dealer_df,
+            "dealer_df": dealer_contracts_df,
+        }
+
+    selected_items = dealer_options.items()
+    if dealer_choice != "Все дилеры":
+        selected_items = [(dealer_choice, dealer_options[dealer_choice])]
+
+    checks = []
+    with st.spinner("Загружаю и сверяю дилеров..."):
+        for sheet_name, sheet_url in selected_items:
+            try:
+                checks.append(run_one_dealer_check(sheet_name, sheet_url))
+            except Exception as exc:
+                checks.append({
+                    "sheet_name": sheet_name,
+                    "dealer_name": sheet_name,
+                    "error": str(exc),
+                    "result_df": pd.DataFrame(),
+                    "status_view": pd.DataFrame(),
+                    "main_df": pd.DataFrame(),
+                    "dealer_df": pd.DataFrame(),
+                })
+
+    load_errors = [x for x in checks if x["error"]]
+    valid_checks = [x for x in checks if not x["error"]]
+
+    if load_errors:
+        with st.expander("Ошибки загрузки / структуры файлов", expanded=True):
+            for item in load_errors:
+                st.error(f"{item['sheet_name']}: {item['error']}")
+
+    if not valid_checks:
+        st.stop()
+
+    all_results = pd.concat(
+        [x["result_df"] for x in valid_checks if not x["result_df"].empty],
+        ignore_index=True
     )
 
-    ok_count = len(result_df[result_df["Результат"] == "OK"])
-    bad_count = len(result_df[result_df["Результат"] == "Ошибка"])
+    all_statuses = pd.concat(
+        [x["status_view"] for x in valid_checks if not x["status_view"].empty],
+        ignore_index=True
+    )
 
-    sales_count = len(status_view[status_view[status_col].map(normalize_text) == "sales"])
-    stock_dlr_count = len(status_view[status_view[status_col].map(normalize_text) == "stock dlr"])
-    transit_count = len(status_view[status_view[status_col].map(normalize_text) == "tranzit to dlr"])
-    stock_kz_count = len(status_view[status_view[status_col].map(normalize_text) == "stock kz"])
+    if all_results.empty:
+        st.warning("Нет данных для проверки.")
+        st.stop()
+
+    ok_count = len(all_results[all_results["Результат"] == "OK"])
+    bad_count = len(all_results[all_results["Результат"] == "Ошибка"])
+
+    sales_count = len(all_statuses[all_statuses[status_col].map(normalize_text) == "sales"]) if not all_statuses.empty else 0
+    stock_dlr_count = len(all_statuses[all_statuses[status_col].map(normalize_text) == "stock dlr"]) if not all_statuses.empty else 0
+    transit_count = len(all_statuses[all_statuses[status_col].map(normalize_text) == "tranzit to dlr"]) if not all_statuses.empty else 0
+    stock_kz_count = len(all_statuses[all_statuses[status_col].map(normalize_text) == "stock kz"]) if not all_statuses.empty else 0
 
     k1, k2, k3, k4, k5, k6 = st.columns(6)
-    k1.metric("OK", ok_count)
-    k2.metric("Ошибки", bad_count)
+    k1.metric("OK всего", ok_count)
+    k2.metric("Ошибки всего", bad_count)
     k3.metric("Sales", sales_count)
     k4.metric("Stock DLR", stock_dlr_count)
     k5.metric("Tranzit to DLR", transit_count)
@@ -370,28 +476,51 @@ with tab_check:
 
     st.divider()
 
-    status_chart = status_view.groupby(status_col).size().reset_index(name="Количество")
-    fig_status = px.bar(
-        status_chart,
-        x=status_col,
-        y="Количество",
-        text="Количество",
-        color_discrete_sequence=["#1B4F9B"],
+    summary_rows = []
+    for item in valid_checks:
+        result_df = item["result_df"]
+        status_view = item["status_view"]
+
+        summary_rows.append({
+            "Дилер": item["dealer_name"],
+            "OK": len(result_df[result_df["Результат"] == "OK"]),
+            "Ошибки": len(result_df[result_df["Результат"] == "Ошибка"]),
+            "Всего VIN в проверке": len(result_df),
+            "Sales": len(status_view[status_view[status_col].map(normalize_text) == "sales"]) if not status_view.empty else 0,
+            "Stock DLR": len(status_view[status_view[status_col].map(normalize_text) == "stock dlr"]) if not status_view.empty else 0,
+            "Tranzit to DLR": len(status_view[status_view[status_col].map(normalize_text) == "tranzit to dlr"]) if not status_view.empty else 0,
+            "Stock KZ": len(status_view[status_view[status_col].map(normalize_text) == "stock kz"]) if not status_view.empty else 0,
+        })
+
+    summary_df = pd.DataFrame(summary_rows).sort_values("Ошибки", ascending=False)
+
+    fig_summary = px.bar(
+        summary_df,
+        x="Дилер",
+        y=["OK", "Ошибки"],
+        barmode="group",
+        text_auto=True,
+        color_discrete_map={
+            "OK": "#067647",
+            "Ошибки": "#B42318",
+        },
     )
-    fig_status.update_traces(textposition="outside")
-    fig_status.update_layout(height=260, margin=dict(t=10, b=10), showlegend=False)
-    st.plotly_chart(fig_status, use_container_width=True)
+    fig_summary.update_layout(height=360, margin=dict(t=10, b=10), xaxis_tickangle=-30)
+    st.plotly_chart(fig_summary, use_container_width=True)
 
-    errors_df = result_df[result_df["Результат"] == "Ошибка"].copy()
-    ok_df = result_df[result_df["Результат"] == "OK"].copy()
+    errors_df = all_results[all_results["Результат"] == "Ошибка"].copy()
+    ok_df = all_results[all_results["Результат"] == "OK"].copy()
 
-    tab_err, tab_ok, tab_status, tab_main, tab_dealer = st.tabs([
-        "Ошибки",
-        "OK",
-        "Статусы",
-        "Общий файл",
-        "Файл дилера",
+    tab_total, tab_err, tab_ok, tab_status, tab_raw = st.tabs([
+        "Итог по дилерам",
+        "Все ошибки",
+        "Все OK",
+        "Все статусы",
+        "Данные по выбранным файлам",
     ])
+
+    with tab_total:
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
     with tab_err:
         st.dataframe(errors_df, use_container_width=True, hide_index=True)
@@ -400,15 +529,18 @@ with tab_check:
         st.dataframe(ok_df, use_container_width=True, hide_index=True)
 
     with tab_status:
-        st.dataframe(status_view, use_container_width=True, hide_index=True)
+        st.dataframe(all_statuses, use_container_width=True, hide_index=True)
 
-    with tab_main:
-        st.caption("Данные из общего файла только по выбранному дилеру")
-        st.dataframe(main_dealer_df, use_container_width=True, hide_index=True)
-
-    with tab_dealer:
-        st.caption("Данные из листа Контракты дилера")
-        st.dataframe(dealer_contracts_df, use_container_width=True, hide_index=True)
+    with tab_raw:
+        for item in valid_checks:
+            with st.expander(item["dealer_name"]):
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.caption("Общий файл")
+                    st.dataframe(item["main_df"], use_container_width=True, hide_index=True)
+                with c2:
+                    st.caption("Файл дилера")
+                    st.dataframe(item["dealer_df"], use_container_width=True, hide_index=True)
 
     with st.expander("Все результаты проверки"):
-        st.dataframe(result_df, use_container_width=True, hide_index=True)
+        st.dataframe(all_results, use_container_width=True, hide_index=True)
