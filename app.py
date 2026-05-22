@@ -82,6 +82,18 @@ def normalize_vin(value):
     return re.sub(r"[^A-Z0-9]", "", str(value).upper().strip())
 
 
+def get_value(row, col, suffix=None):
+    if suffix:
+        suffixed_col = f"{col}_{suffix}"
+        if suffixed_col in row.index:
+            return row.get(suffixed_col)
+
+    if col in row.index:
+        return row.get(col)
+
+    return ""
+
+
 @st.cache_data(ttl=300)
 def load_main_data():
     df = pd.read_csv(MAIN_SHEET_URL)
@@ -174,15 +186,16 @@ def compare_dealer(main_df, dealer_df, selected_dealer_value):
         vin = row["_vin"]
         source = row["_merge"]
 
-        base_model = row.get(f"{model_col}_base", "")
-        dealer_model = row.get(f"{dealer_model_col}_dealer", "")
-        base_status = row.get(f"{status_col}_base", "")
+        base_model = get_value(row, model_col, "base")
+        dealer_model = get_value(row, dealer_model_col, "dealer")
+
+        base_status = get_value(row, status_col, "base")
         base_status_norm = normalize_text(base_status)
 
-        base_sale_date = row.get(f"{date_col}_base", pd.NaT)
-        dealer_delivery_date = row.get(f"{dealer_delivery_date_col}_dealer", pd.NaT)
-        dealer_contract_date = row.get(f"{dealer_contract_date_col}_dealer", pd.NaT)
-        dealer_cancel_date = row.get(f"{dealer_cancel_date_col}_dealer", pd.NaT)
+        base_sale_date = get_value(row, date_col, "base")
+        dealer_delivery_date = get_value(row, dealer_delivery_date_col, "dealer")
+        dealer_contract_date = get_value(row, dealer_contract_date_col, "dealer")
+        dealer_cancel_date = get_value(row, dealer_cancel_date_col, "dealer")
 
         issues = []
 
@@ -202,8 +215,8 @@ def compare_dealer(main_df, dealer_df, selected_dealer_value):
                     issues,
                     "Проверить",
                     "Статус",
-                    "VIN есть в общем файле, но нет в контрактах дилера и не заполнен logistics status",
-                    "Проверить logistics status в общем файле",
+                    "VIN есть в общем файле, но код не смог прочитать logistics status",
+                    "Проверить точное название столбца logistics status в общем файле",
                 )
             else:
                 add_issue(
@@ -301,12 +314,12 @@ def compare_dealer(main_df, dealer_df, selected_dealer_value):
             "Все замечания": " | ".join([x["problem"] for x in issues if x["level"] != "OK"]),
             "Дилер": selected_dealer_value,
             "VIN": vin,
-            "Dealer в общем файле": row.get(f"{dealer_col}_base", ""),
-            "City у дилера": row.get(f"{dealer_city_col}_dealer", ""),
+            "Dealer в общем файле": get_value(row, dealer_col, "base"),
+            "City у дилера": get_value(row, dealer_city_col, "dealer"),
             "logistics status": base_status,
             "Модель в общем файле": base_model,
             "Модель у дилера": dealer_model,
-            "Дата продажи": row.get(f"{date_col}_base", ""),
+            "Дата продажи": base_sale_date,
             "Дата выдачи дилера": dealer_delivery_date,
             "Дата контракта": dealer_contract_date,
             "Дата отмены контракта": dealer_cancel_date,
@@ -560,7 +573,7 @@ with tab_check:
     all_statuses = pd.concat(status_frames, ignore_index=True) if status_frames else pd.DataFrame()
 
     if all_results.empty:
-        st.success("По выбранным дилерам нет ошибок продаж. Стоки и транзит скрыты из проверки.")
+        st.success("По выбранным дилерам нет ошибок продаж. Stock DLR / Tranzit to DLR / Stock KZ скрыты из проверки.")
         st.stop()
 
     critical_count = len(all_results[all_results["Уровень"] == "Критично"])
@@ -650,7 +663,7 @@ with tab_check:
         st.dataframe(summary_df, use_container_width=True, hide_index=True)
 
     with tab_status:
-        st.caption("Это справка по статусам. Stock DLR / Tranzit to DLR / Stock KZ не попадают в проверку контрактов.")
+        st.caption("Справка по статусам. Stock DLR / Tranzit to DLR / Stock KZ скрыты из проверки контрактов.")
         st.dataframe(all_statuses, use_container_width=True, hide_index=True)
 
     with tab_raw:
